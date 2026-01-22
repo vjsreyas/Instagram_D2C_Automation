@@ -37,10 +37,14 @@ def reply_private(user_id, message_text):
         print(f"(Private) Error: {e}")
 
 def reply_private_to_comment(comment_id, message_text):
-    url = f"https://graph.facebook.com/v24.0/{BUSSINESS_ID}/messages?access_token={ACCESS_TOKEN}"
+    url = f"https://graph.facebook.com/v24.0/me/messages?access_token={ACCESS_TOKEN}"
     payload = {
-        "recipient": {"comment_id": comment_id},
-        "message": {"text": message_text}
+        "recipient": {
+            "comment_id": comment_id
+            },
+        "message": {
+            "text": message_text
+            }
     }
     
     try:
@@ -70,7 +74,7 @@ def verify_webhook():
 @app.route("/webhook", methods=["POST"])
 def handle_webhook():
     data = request.json
-    #print("Raw Json data:\n", data) 
+    print("Raw Json data:\n", data) 
     if data.get("object") == "instagram":
         for entry in data.get("entry", []):
             
@@ -103,17 +107,17 @@ def handle_webhook():
                             continue
 
                         comment_id = value.get("id")
+                        print(f"\nComment Id = {comment_id}\n")
                         comment_text = value.get("text", "").lower()
                         
-                        print(f"Comment received: {comment_text}")
 
                         if "price" in comment_text.lower():
                             reply_public(comment_id, "Please check your DMs for the price!")
-                            reply_private_to_comment(comment_id, "The price is $49.99. Check our bio to buy!")
+                            reply_private_to_comment(comment_id, "Lets fking go")
                         
                         elif "link" in comment_text:
                             reply_public(comment_id, "Sent! Check your DMs ")
-                            reply_private_to_comment(comment_id, "Here is the link: www.shop.com")
+                            reply_private_to_comment(comment_id, "LETSSSSSS GPPPPPPP")
 
     return "EVENT_RECEIVED", 200
 
