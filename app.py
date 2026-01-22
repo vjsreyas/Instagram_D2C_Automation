@@ -2,6 +2,7 @@ import os
 from flask import Flask, request
 from dotenv import load_dotenv
 import requests
+import json 
 
 load_dotenv()
 
@@ -11,6 +12,9 @@ VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
 ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")
 BUSSINESS_ID = os.getenv("BUSSINESS_ID")  
 
+def json_output(data):
+    with open("output.json", "w", encoding="utf-8") as file:
+        json.dump(data, file, indent=4)
 
 def reply_public(comment_id, message_text):
     url = f"https://graph.facebook.com/v24.0/{comment_id}/replies"
@@ -75,6 +79,9 @@ def verify_webhook():
 def handle_webhook():
     data = request.json
     print("Raw Json data:\n", data) 
+    json_output(data)
+
+    
     if data.get("object") == "instagram":
         for entry in data.get("entry", []):
             
