@@ -1,4 +1,5 @@
 import os
+import threading
 from flask import Flask, request
 from dotenv import load_dotenv
 import requests
@@ -16,17 +17,24 @@ def json_output(data):
     with open("output.json", "w", encoding="utf-8") as file:
         json.dump(data, file, indent=4)
 
+def send_request(url, payload, request_type):
+    try:
+        response = requests.post(url, json=payload)
+        if response.status_code == 200:
+            print(f"({request_type}) Sent Successfully!")
+        else:
+            print(f"({request_type}) Failed: {response.json()}")
+    except Exception as e:
+        print(f"({request_type}) Network Error: {e}")
+
 def reply_public(comment_id, message_text):
     url = f"https://graph.facebook.com/v24.0/{comment_id}/replies"
     payload = {
         "message": message_text,
         "access_token": ACCESS_TOKEN
     }
-    try:
-        requests.post(url, json=payload)
-        print(f"(Public) Reply sent to {comment_id}")
-    except Exception as e:
-        print(f"(Public) Error: {e}")
+    sender_thread = threading.Thread(target=send_request, args=(url, payload, "Public Reply"))
+    sender_thread.start()
 
 def reply_private(user_id, message_text):
     url = f"https://graph.facebook.com/v24.0/me/messages?access_token={ACCESS_TOKEN}"
@@ -34,11 +42,8 @@ def reply_private(user_id, message_text):
         "recipient": {"id": user_id},
         "message": {"text": message_text}
     }
-    try:
-        requests.post(url, json=payload)
-        print(f"(Private) DM sent to user {user_id}")
-    except Exception as e:
-        print(f"(Private) Error: {e}")
+    sender_thread = threading.Thread(target=send_request, args=(url, payload, "Private DM"))
+    sender_thread.start()
 
 def reply_private_to_comment(comment_id, message_text):
     url = f"https://graph.facebook.com/v24.0/me/messages?access_token={ACCESS_TOKEN}"
@@ -51,19 +56,22 @@ def reply_private_to_comment(comment_id, message_text):
             }
     }
     
-    try:
-        response = requests.post(url, json=payload)
-        response_data = response.json()
+    # try:
+    #     response = requests.post(url, json=payload)
+    #     response_data = response.json()
         
-        if response.status_code == 200:
-            print(f"\tDM Success! Message ID: {response_data.get('message_id')}")
-        else:
-            print(f"\tDM FAILED (Status {response.status_code})")
-            print(f"\tError Code: {response_data.get('error', {}).get('code')}")
-            print(f"\tError Message: {response_data.get('error', {}).get('message')}")
+    #     if response.status_code == 200:
+    #         print(f"\tDM Success! Message ID: {response_data.get('message_id')}")
+    #     else:
+    #         print(f"\tDM FAILED (Status {response.status_code})")
+    #         print(f"\tError Code: {response_data.get('error', {}).get('code')}")
+    #         print(f"\tError Message: {response_data.get('error', {}).get('message')}")
             
-    except Exception as e:
-        print(f" Network Error: {e}")
+    # except Exception as e:
+    #     print(f" Network Error: {e}")
+
+    sender_thread = threading.Thread(target=send_request, args=(url, payload, "Private Comment DM"))
+    sender_thread.start()
 
 @app.route("/webhook", methods=["GET"])
 def verify_webhook():
@@ -72,7 +80,7 @@ def verify_webhook():
     challenge = request.args.get("hub.challenge")
     
     if mode == "subscribe" and token == VERIFY_TOKEN:
-        return challenge, 200
+        return str(challenge), 200
     return "Forbidden", 403
 
 @app.route("/webhook", methods=["POST"])
@@ -81,7 +89,6 @@ def handle_webhook():
     print("Raw Json data:\n", data) 
     json_output(data)
 
-    
     if data.get("object") == "instagram":
         for entry in data.get("entry", []):
             
@@ -91,8 +98,10 @@ def handle_webhook():
                     
                     sender_id = event["sender"]["id"]
                     
-                    if sender_id == BUSSINESS_ID:
+                    if event.get("message", {}).get("is_echo"):
                         continue
+                    
+        
 
                     if "message" in event and "text" in event["message"]:
                         message_text = event["message"]["text"].lower()
@@ -128,5 +137,11 @@ def handle_webhook():
 
     return "EVENT_RECEIVED", 200
 
+# if __name__ == "__main__":
+#     app.run(port=5000, debug=True)
+
 if __name__ == "__main__":
-    app.run(port=5000, debug=True)
+    app.run(
+        host ="0.0.0.0",
+        port = int(os.environ.get("PORT",8080))
+    )
