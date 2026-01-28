@@ -4,6 +4,7 @@ from flask import Flask, request
 from dotenv import load_dotenv
 import requests
 import json 
+import openai
 
 load_dotenv()
 
@@ -11,21 +12,51 @@ app = Flask(__name__)
 
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
 ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")
-BUSSINESS_ID = os.getenv("BUSSINESS_ID")  
+BUSSINESS_ID = os.getenv("BUSSINESS_ID")
+# OPEN_AI_API_KEY = os.getenv("OPEN_AI_API_KEY")
+
+# client = openai.OpenAI(api_key=OPEN_AI_API_KEY)
+
+prompt = """
+You are a friendly and helpful sales assistant for 'Demo Shop', a trendy fashion store.
+Your goal is to answer customer questions politely and encourage them to buy.
+
+Key Information:
+- Shipping: Free shipping on orders over amount infinite.
+- Link: provide the link to the shop "hello.com"
+- Tone: Casual, Emoji-friendly, but professional. 
+- Length: Keep responses short (under 2 sentences) because this is Instagram.
+"""
 
 def json_output(data):
     with open("output.json", "w", encoding="utf-8") as file:
         json.dump(data, file, indent=4)
 
-def send_request(url, payload, request_type):
-    try:
-        response = requests.post(url, json=payload)
-        if response.status_code == 200:
-            print(f"({request_type}) Sent Successfully!")
-        else:
-            print(f"({request_type}) Failed: {response.json()}")
-    except Exception as e:
-        print(f"({request_type}) Network Error: {e}")
+# def get_ai_response(message_text):
+#     try:
+#         response = openai.ChatCompletion.create(
+#             model="gpt-4o-mini",
+#             messages=[{"role": "system", "content": prompt},
+#                 {"role": "user", "content": message_text}
+#                 ]
+#             temperature=0.6,
+#             max_tokens=500,
+#             top_p=1,
+#         )
+#         return response.choices[0].message.content
+#     except Exception as e:
+#         print(f"Connection Error: {e}")
+#         return "We are having a slight issue connecting with our server. Please try again later!"
+
+# def send_request(url, payload, request_type):
+#     try:
+#         response = requests.post(url, json=payload)
+#         if response.status_code == 200:
+#             print(f"({request_type}) Sent Successfully!")
+#         else:
+#             print(f"({request_type}) Failed: {response.json()}")
+#     except Exception as e:
+#         print(f"({request_type}) Response Error: {e}")
 
 def reply_public(comment_id, message_text):
     url = f"https://graph.facebook.com/v24.0/{comment_id}/replies"
@@ -106,14 +137,15 @@ def handle_webhook():
                     if "message" in event and "text" in event["message"]:
                         message_text = event["message"]["text"].lower()
                         print(f"DM received: {message_text}")
-                        
+                    
                         reply_private(sender_id, "Hello! How can I help?")
-                        
-
                         if "price" in message_text:
-                            reply_private(sender_id, "The price is $49.99.")
+                            reply_private(sender_id, "The price is Infinite.")
                         elif "hello" in message_text:
                             reply_private(sender_id, "Hi there! How can I help?")
+
+                        # ai_response = get_ai_response(message_text)
+                        # reply_private(sender_id, ai_response)
 
             elif "changes" in entry:
                 for change in entry["changes"]:
@@ -129,7 +161,8 @@ def handle_webhook():
                         print(f"\nComment Id = {comment_id}\n")
                         comment_text = value.get("text", "").lower()
                         
-
+                        # ai_response = get_ai_response(comment_text)
+                        # reply_private_to_comment(comment_id, ai_response)
                         if "price" in comment_text.lower():
                             reply_public(comment_id, "Please check your DMs for the price!")
                             reply_private_to_comment(comment_id, "Lets fking go")
