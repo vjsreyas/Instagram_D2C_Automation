@@ -117,10 +117,14 @@ def verify_webhook():
 @app.route("/webhook", methods=["POST"])
 def handle_webhook():
     data = request.json
-    print("Raw Json data:\n", data) 
+    # print("\n Raw Json data:\n", data) 
     json_output(data)
 
     if data.get("object") == "instagram":
+
+        for entry in data.get("entry",[]):
+            print(entry)
+
         for entry in data.get("entry", []):
             
             if "messaging" in entry:
