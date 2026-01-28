@@ -107,6 +107,9 @@ def handle_webhook():
                         message_text = event["message"]["text"].lower()
                         print(f"DM received: {message_text}")
                         
+                        reply_private(sender_id, "Hello! How can I help?")
+                        
+
                         if "price" in message_text:
                             reply_private(sender_id, "The price is $49.99.")
                         elif "hello" in message_text:
