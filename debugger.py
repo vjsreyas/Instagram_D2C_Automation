@@ -25,7 +25,7 @@ class Colors:
     GREEN = '\033[92m'  # Success
     YELLOW = '\033[93m' # Comments
     RED = '\033[91m'   # Errors
-    RESET = '\033[0m'   # Reset (imp)
+    RESET = '\033[0m'   # Reset (important)
     BOLD = '\033[1m'
     UNDERLINE = '\033[4m'
 
@@ -193,11 +193,11 @@ def handle_webhook():
 
     return "EVENT_RECEIVED", 200
 
-# if __name__ == "__main__":
-#     app.run(port=5000, debug=True)
-
 if __name__ == "__main__":
-    app.run(
-        host ="0.0.0.0",
-        port = int(os.environ.get("PORT",8080))
-    )
+    app.run(port=5000, debug=True)
+
+# if __name__ == "__main__":
+#     app.run(
+#         host ="0.0.0.0",
+#         port = int(os.environ.get("PORT",8080))
+#     )
