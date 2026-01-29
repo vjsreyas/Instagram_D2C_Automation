@@ -26,4 +26,4 @@ I also want to add No Code Configuration. This will be a settings page where the
 Project Strucutre:
 
 app.py: Main application code
-.env: To store the tokens 
+.env: To store the tokens

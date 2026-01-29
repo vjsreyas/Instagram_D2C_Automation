@@ -1,5 +1,6 @@
 .env
 debugger.py
+test_secrets.py
 output.json
 __pycache__/
 *.pyc
