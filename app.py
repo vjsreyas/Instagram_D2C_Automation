@@ -25,7 +25,7 @@ class Colors:
     GREEN = '\033[92m'  # Success
     YELLOW = '\033[93m' # Comments
     RED = '\033[91m'   # Errors
-    RESET = '\033[0m'   # Reset (imp)
+    RESET = '\033[0m'   # Reset (improtant)
     BOLD = '\033[1m'
     UNDERLINE = '\033[4m'
 
@@ -43,6 +43,8 @@ Example:
 user: Whats the price of this?
 you: Its $50. Check dms for more information. (In dms provide the link)
 
+Answer In less than 20 words.
+
 """
 
 def json_output(data):
@@ -58,7 +60,7 @@ def get_ai_response(message_text):
                 {"role": "user", "content": message_text}
             ],
             temperature=0.6,
-            max_tokens=300,
+            max_tokens=100,
             top_p=1,
         )
         return response.choices[0].message.content
@@ -76,32 +78,56 @@ def send_request(url, payload, request_type):
     except Exception as e:
         print(f"{Colors.RED}({request_type}) Response Error: {e}{Colors.RESET}")
 
-def reply_public(comment_id, message_text):
-    url = f"https://graph.facebook.com/v24.0/{comment_id}/replies"
-    payload = {
-        "message": message_text,
-        "access_token": ACCESS_TOKEN
-    }
-    threading.Thread(target=send_request, args=(url, payload, "Public Reply")).start()
 
-def reply_dm(user_id, message_text):
+def handle_dm_async(sender_id, message_text): # Sends Ai response to the bg
+    ai_response = get_ai_response(message_text)
     url = f"https://graph.facebook.com/v24.0/me/messages?access_token={ACCESS_TOKEN}"
-    payload = {
-        "recipient": {"id": user_id},
-        "message": {"text": message_text}
-    }
-    threading.Thread(target=send_request, args=(url, payload, "Private DM")).start()
+    payload = {"recipient": {"id": sender_id}, "message": {"text": ai_response}}
+    send_request(url, payload, "Private DM")
 
-def reply_dm_from_comment(comment_id, message_text):
-    url = f"https://graph.facebook.com/v24.0/me/messages?access_token={ACCESS_TOKEN}"
-    payload = {
-        "recipient": {
-            "comment_id": comment_id
-            },
-        "message": {
-            "text": message_text
-            }
+def handle_comment_async(comment_id, comment_text): # replies privately in the background
+    #  Public - Static
+    url_public = f"https://graph.facebook.com/v24.0/{comment_id}/replies"
+    payload_public = {"message": "Please check your DMs!", "access_token": ACCESS_TOKEN}
+    send_request(url_public, payload_public, "Public Reply")
+    
+    ai_response = get_ai_response(comment_text)
+    
+
+    # Private - AI
+    url_private = f"https://graph.facebook.com/v24.0/me/messages?access_token={ACCESS_TOKEN}"
+    payload_private = {
+        "recipient": {"comment_id": comment_id},
+        "message": {"text": ai_response}
     }
+    send_request(url_private, payload_private, "Private Comment DM")
+
+# def reply_public(comment_id, message_text):
+#     url = f"https://graph.facebook.com/v24.0/{comment_id}/replies"
+#     payload = {
+#         "message": message_text,
+#         "access_token": ACCESS_TOKEN
+#     }
+#     threading.Thread(target=send_request, args=(url, payload, "Public Reply")).start()
+
+# def reply_dm(user_id, message_text):
+#     url = f"https://graph.facebook.com/v24.0/me/messages?access_token={ACCESS_TOKEN}"
+#     payload = {
+#         "recipient": {"id": user_id},
+#         "message": {"text": message_text}
+#     }
+#     threading.Thread(target=send_request, args=(url, payload, "Private DM")).start()
+
+# def reply_dm_from_comment(comment_id, message_text):
+#     url = f"https://graph.facebook.com/v24.0/me/messages?access_token={ACCESS_TOKEN}"
+#     payload = {
+#         "recipient": {
+#             "comment_id": comment_id
+#             },
+#         "message": {
+#             "text": message_text
+#             }
+#     }
     
     # try:
     #     response = requests.post(url, json=payload)
@@ -117,7 +143,7 @@ def reply_dm_from_comment(comment_id, message_text):
     # except Exception as e:
     #     print(f" Network Error: {e}")
 
-    threading.Thread(target=send_request, args=(url, payload, "Private Comment DM")).start()
+    # threading.Thread(target=send_request, args=(url, payload, "Private Comment DM")).start()
 
 @app.route("/webhook", methods=["GET"])
 def verify_webhook():
@@ -148,18 +174,19 @@ def handle_webhook():
                     
                     if "message" in event and "text" in event["message"]:
                         message_text = event["message"]["text"].lower()
-                        # UPDATED: Using Colors.CYAN for DMs
                         print(f"{Colors.CYAN}DM received: {message_text}{Colors.RESET}")
-                    
+
+                        threading.Thread(target=handle_dm_async, args=(sender_id, message_text)).start()
+                       
                         # reply_dm(sender_id, "Hello! How can I help?")
                         # if "price" in message_text:
                         #     reply_dm(sender_id, "The price is Infinite.")
                         # elif "hello" in message_text:
                         #     reply_dm(sender_id, "Hi there! How can I help?")
 
-                        ai_response = get_ai_response(message_text)
+                        # ai_response = get_ai_response(message_text)
                         # print(f"AI Response: \n{ai_response}\n")
-                        reply_dm(sender_id, ai_response)
+                        # reply_dm(sender_id, ai_response)
                         
             elif "changes" in entry:
                 for change in entry["changes"]:
@@ -168,19 +195,19 @@ def handle_webhook():
                         
                         sender_id = value.get("from", {}).get("id")
                         if sender_id == BUSSINESS_ID:
-                            # print(f"Ignoring selfncomment from {sender_id}")
                             continue
 
                         comment_id = value.get("id")
-                        # UPDATED: Using Colors.YELLOW for Comment info
                         print(f"\n{Colors.YELLOW}Comment Id = {comment_id}{Colors.RESET}")
                         comment_text = value.get("text", "").lower()
                         print(f"{Colors.YELLOW}Comment Text: {comment_text}{Colors.RESET}\n")
-                        
-                        reply_public(comment_id, "Please check your DMs!")
-                        ai_response = get_ai_response(comment_text)
+                        threading.Thread(target=handle_comment_async, args=(comment_id, comment_text)).start()
+                       
+                       
+                        # reply_public(comment_id, "Please check your DMs!")
+                        # ai_response = get_ai_response(comment_text)
                         # print(f"AI Response: \n{ai_response}\n")
-                        reply_dm_from_comment(comment_id, ai_response)
+                        # reply_dm_from_comment(comment_id, ai_response)
 
 
                         # if "price" in comment_text.lower():
