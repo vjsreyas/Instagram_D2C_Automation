@@ -1,6 +1,8 @@
 .env
 debugger.py
-test_secrets.py
+all_file.py
 output.json
 __pycache__/
 *.pyc
+service_account.json
+.venv

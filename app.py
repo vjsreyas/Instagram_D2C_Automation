@@ -1,323 +1,184 @@
 import os
-import threading
-from flask import Flask, request
-from dotenv import load_dotenv
-import requests
-import json 
-import redis
-from openai import OpenAI
+import sys
+import json
 import hmac
 import hashlib
-load_dotenv()
+import threading
+import requests
 
-app = Flask(__name__)
+from flask import Flask, request
+from dotenv import load_dotenv
+from openai import OpenAI
+import gspread
+from google.oauth2.service_account import Credentials
+
+
+load_dotenv()
 
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
 ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")
-BUSSINESS_ID = os.getenv("BUSSINESS_ID")
+BUSINESS_ID = os.getenv("BUSSINESS_ID")
 OPEN_AI_API_KEY = os.getenv("OPEN_AI_API_KEY")
-REDIS_URL = os.getenv("REDIS_URL")
-# REDIS_TOKEN = os.getenv("REDIS_TOKEN")
+APP_SECRET = os.getenv("APP_SECRET")
+
+app = Flask(__name__)
+openai_client = OpenAI(api_key=OPEN_AI_API_KEY)
 
 
-client = OpenAI(api_key=OPEN_AI_API_KEY)
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
+]
 
-try:
-    if REDIS_URL:
-        db = redis.from_url(REDIS_URL, decode_responses=True)
-        print("Connected to Redis Database")
-    else:
-        print("REDIS_URL not found. Using temporary RAM memory.")
-        db = None
-except Exception as e:
-    print(f"Redis Connection Failed: {e}")
-    db = None
+creds = Credentials.from_service_account_file(
+    "service_account.json",
+    scopes=SCOPES
+)
+
+gs_client = gspread.authorize(creds)
 
 
-local_memory = {}
-human_assistance = set()
+sheet = gs_client.open_by_key(
+    "11UezMmW9xMM7dGwpcqsYPdn9beBQE01TjS02rjGjiWs"
+).sheet1
 
-def get_memory(user_id):
-    if db:
-        data = db.get(f"user:{user_id}")
-        if data:
-            return json.loads(data) # Convert string back to list
-        return []
-    else:
-        return local_memory.get(user_id, [])
+def log(message):
+    print(message)
+    sys.stdout.flush()
 
-def save_memory(user_id, history):
-    if db:
-        db.set(f"user:{user_id}", json.dumps(history))
-        db.expire(f"user:{user_id}", 86400)
-    else:
-        local_memory[user_id] = history
+def get_property_by_media(media_id):
+    records = sheet.get_all_records()
+    for row in records:
+        if str(row["media_id"]) == str(media_id):
+            return row
+    return None
 
-class Colors:
-    HEADER = '\033[95m'
-    BLUE = '\033[94m'
-    CYAN = '\033[96m'   # DMs
-    GREEN = '\033[92m'  # Success
-    YELLOW = '\033[93m' # Comments
-    RED = '\033[91m'   # Errors
-    RESET = '\033[0m'   # Reset (improtant)
-    BOLD = '\033[1m'
-    UNDERLINE = '\033[4m'
+def is_valid_signature(req):
+    signature = req.headers.get("X-Hub-Signature-256")
 
-prompt = """
-You are a friendly and helpful sales assistant for 'Demo Shop', a trendy fashion store.
-Your goal is to answer customer questions politely and encourage them to buy.
+    if not signature or not APP_SECRET:
+        return True
 
-Key Information:
-- Shipping: Free shipping on orders over amount infinite.
-- Link: provide the link to the shop "hello.com"
-- Tone: Casual, Emoji-friendly, but professional. 
-- Length: Keep responses short (under 2 sentences) because this is Instagram.
+    expected_hash = signature.split("=")[1]
 
-Example:
-user: Whats the price of this?
-you: Its $50. Check dms for more information. (In dms provide the link)
+    computed_hash = hmac.new(
+        APP_SECRET.encode(),
+        req.data,
+        hashlib.sha256
+    ).hexdigest()
 
-Answer In less than 20 words.
+    return hmac.compare_digest(computed_hash, expected_hash)
 
+def build_property_prompt(property_data, user_message):
+    return f"""
+You are a professional real estate assistant.
+
+Property Details:
+Title: {property_data['title']}
+Price: {property_data['price']}
+Rent: {property_data['rent']}
+Location: {property_data['location']}
+BHK: {property_data['bhk']}
+Size: {property_data['sqft']} sqft
+Amenities: {property_data['amenities']}
+Description: {property_data['description']}
+
+Answer ONLY using the above property data.
+Keep reply under 30 words.
+
+User question: {user_message}
 """
 
-def json_output(data):
-    with open("output.json", "w", encoding="utf-8") as file:
-        json.dump(data, file, indent=4)
-
-def is_valid_signature(request):
-    """
-    Checks if the incoming request is actually from Meta.
-    Returns True if valid, False if fake.
-    """
-
-    signature = request.headers.get('X-Hub-Signature-256')
-
-    if not signature:
-        return False
-    
-    app_secret = os.getenv("APP_SECRET")
-    
-    if not app_secret:
-        print(f"{Colors.FAIL}⚠️ APP_SECRET is missing in .env!{Colors.RESET}")
-        return True 
-    
-    #hmac shar 256
-    expected_hash = signature.split('=')[1]
-    
-    my_hash = hmac.new(
-        key=app_secret.encode(), 
-        msg=request.data,
-        digestmod=hashlib.sha256
-    ).hexdigest()
-    
-    # 5. Compare the two hashes securely
-    return hmac.compare_digest(my_hash, expected_hash)
-
-def get_ai_response(user_id,message_text):
-
-    # user_history = local_memory.get(user_id,[])
-    # user_history.append({"role": "user", "content": message_text})
-
-    # if len(user_history) > 6:
-    #     user_history = user_history[-6:]
-    history = get_memory(user_id)
-
-    history.append({"role": "user", "content": message_text})
-    if len(history) > 6:
-        history = history[-6:]
-
-    save_memory(user_id, history)
-
+def generate_ai_reply(prompt):
     try:
-        messages_payload = [{"role": "system", "content": prompt}] + history
-        
-        response = client.chat.completions.create(
+        response = openai_client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=messages_payload,
-            temperature=0.6,
-            max_tokens=100
+            messages=[{"role": "system", "content": prompt}],
+            temperature=0.4,
+            max_tokens=120
         )
-        
-        ai_reply = response.choices[0].message.content
-        
-
-        history.append({"role": "assistant", "content": ai_reply})
-
-        # user_history.append({"role": "assistant", "content": ai_reply})
-        # local_memory[user_id] = user_history
-        
-        return ai_reply
-        
+        return response.choices[0].message.content
     except Exception as e:
-        print(f"{Colors.FAIL}Connection Error: {e}{Colors.RESET}")
-        return "I'm having a little trouble thinking right now. Try again later!"
+        log(f"AI Error: {e}")
+        return "Please contact the agent for more details."
 
-def send_request(url, payload, request_type):
+def send_request(url, payload, label):
     try:
-        response = requests.post(url, json=payload)
-        if response.status_code == 200:
-            print(f"{Colors.GREEN}({request_type}) Sent Successfully!{Colors.RESET}")
+        r = requests.post(url, json=payload)
+        if r.status_code == 200:
+            log(f"{label} sent")
         else:
-            print(f"{Colors.RED}({request_type}) failed: {response.json()}{Colors.RESET}")
+            log(f"{label} failed: {r.text}")
     except Exception as e:
-        print(f"{Colors.RED}({request_type}) Response Error: {e}{Colors.RESET}")
+        log(f"Network error ({label}): {e}")
 
+def handle_comment(comment_id, comment_text, media_id):
 
-def handle_dm_async(sender_id, message_text): # Sends Ai response to the bg 
-    if sender_id in human_assistance:
-        print(f"{Colors.YELLOW}User {sender_id} is in Human Mode. Bot ignored.{Colors.RESET}")
+    property_data = get_property_by_media(media_id)
+
+    if not property_data:
+        log("No property mapped to this media_id")
         return
-    
-    triggers = ["human", "support", "agent", "stop bot","person","Customer Support"]
-    if any(keyword in message_text for keyword in triggers):
-        human_assistance.add(sender_id)
-        
-        msg = "A Person will be with you shortly!"
-        url = f"https://graph.facebook.com/v24.0/me/messages?access_token={ACCESS_TOKEN}"
-        payload = {"recipient": {"id": sender_id}, "message": {"text": msg}}
-        requests.post(url, json=payload)
-        
-        print(f"{Colors.RED}🚨 User {sender_id} requested Human Handoff!{Colors.RESET}")
-        return
-    
-    ai_response = get_ai_response(sender_id,message_text)
-    url = f"https://graph.facebook.com/v24.0/me/messages?access_token={ACCESS_TOKEN}"
-    payload = {"recipient": {"id": sender_id}, "message": {"text": ai_response}}
-    send_request(url, payload, "Private DM")
 
-def handle_comment_async(comment_id, comment_text): # replies privately in the background
-    #  Public - Static
     url_public = f"https://graph.facebook.com/v24.0/{comment_id}/replies"
-    payload_public = {"message": "Please check your DMs!", "access_token": ACCESS_TOKEN}
-    send_request(url_public, payload_public, "Public Reply")
-    
-    ai_response = get_ai_response(comment_id, comment_text)
-    
+    payload_public = {
+        "message": "Sent you the details in DM 📩",
+        "access_token": ACCESS_TOKEN
+    }
+    send_request(url_public, payload_public, "Public reply")
 
-    # Private - AI
+    prompt = build_property_prompt(property_data, comment_text)
+    private_reply = generate_ai_reply(prompt)
+
     url_private = f"https://graph.facebook.com/v24.0/me/messages?access_token={ACCESS_TOKEN}"
     payload_private = {
         "recipient": {"comment_id": comment_id},
-        "message": {"text": ai_response}
+        "message": {"text": private_reply}
     }
-    send_request(url_private, payload_private, "Private Comment DM")
-
-# def reply_public(comment_id, message_text):
-#     url = f"https://graph.facebook.com/v24.0/{comment_id}/replies"
-#     payload = {
-#         "message": message_text,
-#         "access_token": ACCESS_TOKEN
-#     }
-#     threading.Thread(target=send_request, args=(url, payload, "Public Reply")).start()
-
-# def reply_dm(user_id, message_text):
-#     url = f"https://graph.facebook.com/v24.0/me/messages?access_token={ACCESS_TOKEN}"
-#     payload = {
-#         "recipient": {"id": user_id},
-#         "message": {"text": message_text}
-#     }
-#     threading.Thread(target=send_request, args=(url, payload, "Private DM")).start()
-
-# def reply_dm_from_comment(comment_id, message_text):
-#     url = f"https://graph.facebook.com/v24.0/me/messages?access_token={ACCESS_TOKEN}"
-#     payload = {
-#         "recipient": {
-#             "comment_id": comment_id
-#             },
-#         "message": {
-#             "text": message_text
-#             }
-#     }
-    
-    # try:
-    #     response = requests.post(url, json=payload)
-    #     response_data = response.json()
-        
-    #     if response.status_code == 200:
-    #         print(f"\tDM Success! Message ID: {response_data.get('message_id')}")
-    #     else:
-    #         print(f"\tDM FAILED (Status {response.status_code})")
-    #         print(f"\tError Code: {response_data.get('error', {}).get('code')}")
-    #         print(f"\tError Message: {response_data.get('error', {}).get('message')}")
-            
-    # except Exception as e:
-    #     print(f" Network Error: {e}")
-
-    # threading.Thread(target=send_request, args=(url, payload, "Private Comment DM")).start()
+    send_request(url_private, payload_private, "Private DM")
 
 @app.route("/webhook", methods=["GET"])
-def verify_webhook():
-    mode = request.args.get("hub.mode")
-    token = request.args.get("hub.verify_token")
-    challenge = request.args.get("hub.challenge")
-    
-    if mode == "subscribe" and token == VERIFY_TOKEN:
-        return str(challenge), 200
-    return "Forbidden :)", 403
+def verify():
+    if (
+        request.args.get("hub.mode") == "subscribe"
+        and request.args.get("hub.verify_token") == VERIFY_TOKEN
+    ):
+        return request.args.get("hub.challenge"), 200
+    return "Forbidden", 403
+
 
 @app.route("/webhook", methods=["POST"])
-def handle_webhook():
+def webhook():
 
     if not is_valid_signature(request):
-        print(f"{Colors.RED}Invalid Signature Detected!{Colors.RESET}")
         return "Forbidden", 403
 
     data = request.json
-    # json_output(data) 
-    
-    if data.get("object") == "instagram":
-        for entry in data.get("entry", []):
-            if "messaging" in entry:
-                for event in entry["messaging"]:
-                    if "sender" not in event: continue
-                    sender_id = event["sender"]["id"]
 
-        
-                    if event.get("message", {}).get("is_echo"): continue
+    if data.get("object") != "instagram":
+        return "Ignored", 200
 
-                    if "message" not in event or "text" not in event["message"]:
-                        print(f"{Colors.YELLOW} Received non-text message. Ignoring.{Colors.RESET}")
-                        continue
-           
-                    message_text = event["message"]["text"].lower()
-                    print(f"{Colors.CYAN}DM received: {message_text}{Colors.RESET}")
+    for entry in data.get("entry", []):
 
-                    threading.Thread(target=handle_dm_async, args=(sender_id, message_text)).start()
-
-            elif "changes" in entry:
-                for change in entry["changes"]:
-                    field = change.get("field")
+        if "changes" in entry:
+            for change in entry["changes"]:
+                if change.get("field") == "comments":
                     value = change.get("value", {})
 
-                    if field == "comments":
-                        sender_id = value.get("from", {}).get("id")
-                        
-                        if sender_id == BUSSINESS_ID: continue
+                    if value.get("from", {}).get("id") == BUSINESS_ID:
+                        continue
 
-                        comment_id = value.get("id")
-                        comment_text = value.get("text", "").lower()
-                        
-                        print(f"\n{Colors.YELLOW}Comment Id = {comment_id}{Colors.RESET}")
-                        print(f"{Colors.YELLOW}Comment Text: {comment_text}{Colors.RESET}\n")
-                        
-                        threading.Thread(target=handle_comment_async, args=(comment_id, comment_text)).start()
+                    comment_id = value.get("id")
+                    comment_text = value.get("text", "").lower()
+                    media_id = value.get("media", {}).get("id")
 
-                    # Create a story feature soon...
-                    elif field == "mentions":
-                    
-                        sender_id = value.get("sender_id")
-                        print(f"{Colors.CYAN}Story Mention from {sender_id}!{Colors.RESET}")
-                        # threading.Thread(target=handle_story_async, args=(sender_id,)).start()
+                    threading.Thread(
+                        target=handle_comment,
+                        args=(comment_id, comment_text, media_id)
+                    ).start()
 
     return "EVENT_RECEIVED", 200
 
-# if __name__ == "__main__":
-#     app.run(port=5000, debug=True)
 
 if __name__ == "__main__":
-    app.run(
-        host ="0.0.0.0",
-        port = int(os.environ.get("PORT",8080))
-    )
+    app.run(host="0.0.0.0", port=5000, debug=True)
